@@ -1,168 +1,217 @@
-/**
- * Favourite Call - Backend Server
- * Handles Twilio Voice Calls with Custom Caller ID
- * Auto-rejects incoming callbacks
- */
-
 const express = require('express');
 const cors = require('cors');
 const twilio = require('twilio');
-require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
-
-// Twilio Credentials
-const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
-const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
-const TWILIO_TWIML_APP_SID = process.env.TWILIO_TWIML_APP_SID;
-const TWILIO_API_KEY_SID = process.env.TWILIO_API_KEY_SID;
-const TWILIO_API_KEY_SECRET = process.env.TWILIO_API_KEY_SECRET;
-
-// Initialize Twilio Client
-const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Health Check
-app.get('/', (req, res) => {
+// Twilio credentials from environment variables
+const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_PHONE = process.env.TWILIO_PHONE_NUMBER;
+
+// Initialize Twilio client
+const client = twilio(ACCOUNT_SID, AUTH_TOKEN);
+
+// Health check endpoint
+app.get('/health', (req, res) => {
   res.json({ 
-    status: 'Favourite Call Server Running',
-    message: 'Server is ready for calls!'
+    status: 'ok', 
+    message: 'Favourite Call Server Running',
+    timestamp: new Date().toISOString()
   });
 });
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'healthy' });
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    name: 'Favourite Call API',
+    version: '1.0.0',
+    endpoints: ['/health', '/voice', '/call-status']
+  });
 });
 
-/**
- * GET /token
- * Generate Twilio Access Token for browser calling
- */
-app.get('/token', (req, res) => {
-  try {
-    const identity = 'user_' + Date.now();
-
-    const AccessToken = twilio.jwt.AccessToken;
-    const VoiceGrant = AccessToken.VoiceGrant;
-
-    const accessToken = new AccessToken(
-      TWILIO_ACCOUNT_SID,
-      TWILIO_API_KEY_SID,
-      TWILIO_API_KEY_SECRET,
-      { identity: identity }
-    );
-
-    const voiceGrant = new VoiceGrant({
-      outgoingApplicationSid: TWILIO_TWIML_APP_SID,
-      incomingAllow: false
-    });
-
-    accessToken.addGrant(voiceGrant);
-
-    res.json({
-      success: true,
-      token: accessToken.toJwt(),
-      identity: identity
-    });
-
-  } catch (error) {
-    console.error('Token error:', error);
-    res.status(500).json({ error: 'Failed to generate token' });
-  }
-});
-
-/**
- * POST /voice
- * Handles OUTGOING calls - Sets Custom Caller ID
- */
-app.post('/voice', (req, res) => {
+// Make outbound call
+app.post('/voice', async (req, res) => {
   try {
     const { To, CallerIdMode, CustomCallerId } = req.body;
-
-    console.log('📞 Outbound call:', { To, CallerIdMode, CustomCallerId });
-
-    const VoiceResponse = twilio.twiml.VoiceResponse;
-    const twiml = new VoiceResponse();
-
+    
+    console.log('=== NEW CALL REQUEST ===');
+    console.log('To:', To);
+    console.log('CallerIdMode:', CallerIdMode);
+    console.log('CustomCallerId:', CustomCallerId);
+    
     if (!To) {
-      twiml.say('No phone number provided.');
-      return res.type('text/xml').send(twiml.toString());
+      return res.status(400).json({ error: 'Phone number (To) is required' });
     }
 
-    // Get Caller ID based on mode
-    let callerId = TWILIO_PHONE_NUMBER;
+    // Clean phone number
+    let toNumber = To.replace(/[^\d+]/g, '');
+    if (!toNumber.startsWith('+')) {
+      toNumber = '+' + toNumber;
+    }
 
-    if (CallerIdMode === 'custom' && CustomCallerId) {
-      // Alphanumeric Sender ID - shows NAME on receiver phone
-      // Works in: Pakistan, India, UK, UAE, etc. (NOT USA/Canada)
-      const alphanumericId = CustomCallerId.replace(/[^a-zA-Z0-9]/g, '').substring(0, 11);
-      if (alphanumericId.length >= 3) {
-        callerId = alphanumericId;
-        console.log('✅ Using Custom Caller ID:', callerId);
-      }
+    // Determine caller ID
+    let callerId = TWILIO_PHONE;
+    
+    // For Private mode, we still use Twilio number but can add <Pause> message
+    // For Custom mode, Twilio only allows verified numbers as caller ID
+    // The custom name will be spoken to the receiver instead
+    
+    console.log('Calling from:', callerId);
+    console.log('Calling to:', toNumber);
+
+    // Create TwiML based on caller ID mode
+    let twimlMessage = '';
+    
+    if (CallerIdMode === 'private') {
+      twimlMessage = '<Response><Say voice="alice">You have a call from a private number.</Say><Pause length="1"/><Dial><Number>' + toNumber + '</Number></Dial></Response>';
+    } else if (CallerIdMode === 'custom' && CustomCallerId) {
+      twimlMessage = '<Response><Say voice="alice">You have a call from ' + CustomCallerId + '.</Say><Pause length="1"/><Dial><Number>' + toNumber + '</Number></Dial></Response>';
+    } else {
+      twimlMessage = '<Response><Dial><Number>' + toNumber + '</Number></Dial></Response>';
     }
 
     // Make the call
-    const dial = twiml.dial({
-      callerId: callerId,
-      answerOnBridge: true,
-      timeout: 30
+    const call = await client.calls.create({
+      to: toNumber,
+      from: callerId,
+      twiml: '<Response><Say voice="alice">Connecting your call from Favourite Call app.</Say><Pause length="1"/></Response>',
+      // For actual connection, we need a proper TwiML URL
+      // This is a simple announcement call for testing
     });
 
-    dial.number(To);
+    console.log('Call SID:', call.sid);
+    console.log('Call Status:', call.status);
 
-    res.type('text/xml').send(twiml.toString());
+    res.json({
+      success: true,
+      callSid: call.sid,
+      status: call.status,
+      to: toNumber,
+      from: callerId,
+      callerIdMode: CallerIdMode
+    });
 
   } catch (error) {
-    console.error('Voice error:', error);
-    const VoiceResponse = twilio.twiml.VoiceResponse;
-    const twiml = new VoiceResponse();
-    twiml.say('An error occurred.');
-    res.type('text/xml').send(twiml.toString());
+    console.error('Call Error:', error.message);
+    res.status(500).json({ 
+      error: error.message,
+      code: error.code || 'UNKNOWN'
+    });
   }
 });
 
-/**
- * POST /voice-incoming
- * AUTO-REJECT all incoming calls (callbacks)
- */
-app.post('/voice-incoming', (req, res) => {
-  console.log('📵 Incoming call REJECTED from:', req.body.From);
+// Two-way call - connects caller to receiver
+app.post('/connect', async (req, res) => {
+  try {
+    const { To, CallerIdMode, CustomCallerId } = req.body;
+    
+    console.log('=== CONNECT CALL REQUEST ===');
+    console.log('To:', To);
+    
+    if (!To) {
+      return res.status(400).json({ error: 'Phone number (To) is required' });
+    }
 
-  const VoiceResponse = twilio.twiml.VoiceResponse;
-  const twiml = new VoiceResponse();
+    // Clean phone number
+    let toNumber = To.replace(/[^\d+]/g, '');
+    if (!toNumber.startsWith('+')) {
+      toNumber = '+' + toNumber;
+    }
 
-  // Reject the call
-  twiml.reject({ reason: 'rejected' });
+    // Get the base URL for callbacks
+    const baseUrl = process.env.RENDER_EXTERNAL_URL || 'https://favourite-call.onrender.com';
 
-  res.type('text/xml').send(twiml.toString());
+    // Make call that will connect to receiver
+    const call = await client.calls.create({
+      to: toNumber,
+      from: TWILIO_PHONE,
+      url: baseUrl + '/twiml/connect?target=' + encodeURIComponent(toNumber) + '&mode=' + (CallerIdMode || 'normal') + '&name=' + encodeURIComponent(CustomCallerId || ''),
+      statusCallback: baseUrl + '/call-status',
+      statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+      statusCallbackMethod: 'POST'
+    });
+
+    console.log('Call initiated:', call.sid);
+
+    res.json({
+      success: true,
+      callSid: call.sid,
+      status: call.status
+    });
+
+  } catch (error) {
+    console.error('Connect Error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-/**
- * POST /call-status
- * Webhook for call status updates
- */
+// TwiML endpoint for connecting calls
+app.all('/twiml/connect', (req, res) => {
+  const target = req.query.target || req.body.target;
+  const mode = req.query.mode || req.body.mode || 'normal';
+  const name = req.query.name || req.body.name || '';
+  
+  console.log('TwiML Connect - Target:', target, 'Mode:', mode, 'Name:', name);
+  
+  let announcement = '';
+  if (mode === 'private') {
+    announcement = '<Say voice="alice">Incoming call from private number.</Say><Pause length="1"/>';
+  } else if (mode === 'custom' && name) {
+    announcement = '<Say voice="alice">Incoming call from ' + name + '.</Say><Pause length="1"/>';
+  }
+  
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  ${announcement}
+  <Dial callerId="${TWILIO_PHONE}" timeout="30">
+    <Number>${target}</Number>
+  </Dial>
+</Response>`;
+
+  res.type('text/xml');
+  res.send(twiml);
+});
+
+// Call status webhook
 app.post('/call-status', (req, res) => {
-  console.log('📊 Call Status:', req.body.CallStatus);
+  console.log('=== CALL STATUS UPDATE ===');
+  console.log('CallSid:', req.body.CallSid);
+  console.log('CallStatus:', req.body.CallStatus);
+  console.log('To:', req.body.To);
+  console.log('From:', req.body.From);
+  console.log('Duration:', req.body.CallDuration);
+  
   res.sendStatus(200);
 });
 
-// Start Server
-app.listen(PORT, () => {
-  console.log(`
-╔════════════════════════════════════════════════╗
-║     🎉 Favourite Call Server Started!          ║
-╠════════════════════════════════════════════════╣
-║  Port: ${PORT}                                    ║
-║  Status: Ready for calls                       ║
-╚════════════════════════════════════════════════╝
-  `);
+// Get call status
+app.get('/call/:sid', async (req, res) => {
+  try {
+    const call = await client.calls(req.params.sid).fetch();
+    res.json({
+      sid: call.sid,
+      status: call.status,
+      duration: call.duration,
+      to: call.to,
+      from: call.from
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-module.exports = app;
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log('=================================');
+  console.log('  Favourite Call Server Started');
+  console.log('  Port:', PORT);
+  console.log('  Twilio Phone:', TWILIO_PHONE);
+  console.log('=================================');
+});

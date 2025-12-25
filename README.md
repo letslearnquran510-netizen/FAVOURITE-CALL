@@ -1,44 +1,61 @@
-# Favourite Call Server
+# Favourite Call Backend Server
 
-Backend server for Favourite Call VoIP application with Custom Caller ID support.
+Backend server for Favourite Call app with real Twilio calling functionality.
 
-## Features
+## Deployment on Render.com
 
-- ✅ Custom Caller ID (shows your name on receiver's phone)
-- ✅ Auto-reject incoming callbacks
-- ✅ Works with Twilio Voice API
+### Step 1: Create GitHub Repository
 
-## Deploy to Render.com
+1. Go to https://github.com/new
+2. Create a new repository named `favourite-call-backend`
+3. Upload these files:
+   - `server.js`
+   - `package.json`
 
-1. Fork this repository
-2. Go to [Render.com](https://render.com)
-3. Create New Web Service
-4. Connect your GitHub repo
-5. Add Environment Variables (see below)
-6. Deploy!
+### Step 2: Deploy on Render.com
 
-## Environment Variables
+1. Go to https://dashboard.render.com
+2. Click "New" → "Web Service"
+3. Connect your GitHub repository
+4. Configure:
+   - **Name:** favourite-call
+   - **Runtime:** Node
+   - **Build Command:** `npm install`
+   - **Start Command:** `npm start`
 
-Set these in Render.com dashboard:
+### Step 3: Environment Variables (Already Set)
 
+Make sure these are configured:
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_PHONE_NUMBER`
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | API info |
+| `/health` | GET | Health check |
+| `/voice` | POST | Make announcement call |
+| `/connect` | POST | Make two-way call |
+| `/call/:sid` | GET | Get call status |
+
+### Making a Call
+
+```bash
+curl -X POST https://favourite-call.onrender.com/connect \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "To=+923001234567&CallerIdMode=custom&CustomCallerId=BankMgr"
 ```
-TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxx
-TWILIO_AUTH_TOKEN=xxxxxxxxxxxxxxxx
-TWILIO_PHONE_NUMBER=+1234567890
-TWILIO_TWIML_APP_SID=APxxxxxxxxxxxxxxxx
-TWILIO_API_KEY_SID=SKxxxxxxxxxxxxxxxx
-TWILIO_API_KEY_SECRET=xxxxxxxxxxxxxxxx
-```
 
-## Endpoints
+### Caller ID Modes
 
-- `GET /` - Health check
-- `GET /token` - Get Twilio access token
-- `POST /voice` - Handle outgoing calls
-- `POST /voice-incoming` - Reject incoming calls
+- **normal**: Shows your Twilio number
+- **private**: Announces "Call from private number"
+- **custom**: Announces "Call from [CustomName]"
 
-## After Deployment
+## Important Notes
 
-Update your Twilio settings:
-1. TwiML App Voice URL: `https://your-app.onrender.com/voice`
-2. Phone Number Incoming URL: `https://your-app.onrender.com/voice-incoming`
+1. Twilio can only show verified phone numbers as actual caller ID
+2. Custom names are ANNOUNCED to receiver, not shown on phone screen
+3. Free tier servers sleep after 15 min - first call takes longer
